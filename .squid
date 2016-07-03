@@ -1,0 +1,2 @@
+PATH=$PATH:/usr/local/opt/llvm/bin
+pip3 install -r requirements.txt
