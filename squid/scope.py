@@ -1,7 +1,3 @@
-class Symbol(object):
-    def __init__(self, name=None, symtype=None, symconst=False, symref=False):
-        pass
-
 class Scope(object):
     def __init__(self, parent=None):
         self._parent  = parent
@@ -30,3 +26,26 @@ class Scope(object):
             result = self._parent.lookup(name)
 
         return result 
+
+class Context(object):
+    def __init__(self, parent=None):
+        if parent:
+            self._types = Scope(parent._types)
+            self._values = Scope(parent._values)
+        else:
+            self._types = Scope()
+            self._values = Scope()
+
+    def types(self):
+        return self._types
+
+    def values(self):
+        return self._values
+
+    def __str__(self):
+        return "Types: " + str(self._types._symbols) + "\nValues: " + str(self._values._symbols)
+
+class Symbol(object):
+    def __init__(self, symvalue=None, symtype=None):
+        self._symvalue = symvalue
+        self._symtype = symtype

@@ -1,19 +1,27 @@
 from grammar import *
 from scope import *
+from squid_types import *
 
 import sys
 
+from llvmlite import ir
+import llvmlite.binding as llvm
+
 program = \
 """
-type String = [i8];
-decl puts : |String| -> i8;
-
-let main = () {
-    if (true) {
-        return 0;
-    };
-    return 1;
+fn foo() {
+    return 8;
 };
+
+fn main () {
+    let x = 8;
+    let y = 4;
+    if (x != y) {
+        return x * y;
+    };
+    return 42;
+};
+
 """
 
 if __name__ == '__main__':
@@ -21,12 +29,14 @@ if __name__ == '__main__':
     #parser = Expr.parser()
     try:
         # Create our root scope
-        root = Scope()
+        root = Context()
 
-        root.bind("void", Type("void"))
-        root.bind("Vector", Type("Vector"))
-        root.bind("i8", Type("i8"))
-        root.bind("bool", Type("bool"))
+        root.types().bind("void", Void())
+        root.types().bind("i8", I8())
+        root.types().bind("i16", I16())
+        root.types().bind("i32", I32())
+        root.types().bind("i64", I64())
+        root.types().bind("bool", Bool())
 
         result = parser.parse_text(program, eof=True)
         
@@ -48,13 +58,16 @@ if __name__ == '__main__':
         #print(dump_ast(result))
 
         def dump_symbols(r):
-            print(r._scope._symbols)
+            print(r._context)
             for f in r.find_all("namespace"):
                 dump_symbols(f)
 
         print("Dumping Symbols:")
-        print(root._symbols)
+        print(root)
         dump_symbols(result)
+
+        print("Dumping IR:")
+        print(str(module))
 
         # Print the module IR
         llvm.initialize()
@@ -63,9 +76,6 @@ if __name__ == '__main__':
 
         llvm_main = llvm.parse_assembly(str(module))
         tm = llvm.Target.from_default_triple().create_target_machine()
-
-        print("Dumping IR:")
-        print(str(module))
     
         with open('output.o', 'wb') as f:
             f.write(tm.emit_object(llvm_main))
