@@ -7,19 +7,20 @@ import sys
 from llvmlite import ir
 import llvmlite.binding as llvm
 
+# linker cmd: ld -o output output.o -read_only_relocs suppress -lc -lcrt1.o
 program = \
 """
-fn foo() {
-    return 8;
-};
+fn puts(str: [i8;6]) -> i32;
 
-fn main () {
-    let x = 8;
-    let y = 4;
+fn main () -> i32 {
+    let x : i32 = 8;
+    let y : i32 = 4;
     if (x != y) {
-        return x * y;
+        let s : [i8;5] = "hello";
+        puts(s);
+        return x*y;
     };
-    return 42;
+    return 0;
 };
 
 """

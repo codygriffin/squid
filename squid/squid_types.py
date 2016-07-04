@@ -9,6 +9,9 @@ class Void(object):
 
     def alloca(self, builder):
         return builder.alloca(self.llvm_type())
+    
+    def __eq__(self, other):
+        return self.__class__ == other.__class__
 
 
 class Bool(Void):
@@ -70,7 +73,7 @@ class Array(Void):
     def alloca(self, builder):
         return builder.alloca(self.llvm_type(), self._count)
 
-class Pointer(Void):
+class Box(Void):
     def __init__(self, t):
         self._type = t
 
@@ -83,7 +86,7 @@ class Pointer(Void):
 
 class Tuple(Void):
     def __init__(self, types):
-        self._types = types
+        self._types = list(types)
 
     def llvm_type(self):
         return ir.LiteralStructType(map(lambda e: e.llvm_type(), self._types))
@@ -103,5 +106,5 @@ class Function(Void):
     def alloca(self, builder):
         return None
 
-    def instantiate(name, builder):
+    def instantiate(self, name, builder):
         return ir.Function(builder, self.llvm_type(), name)

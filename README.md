@@ -1,7 +1,8 @@
 # Squid
 
 ```
-type string = [i8]           // [] without size is a pointer
+
+type string = [i8]           // [] without size is a pointer - a 'box'
 type FourLetterWord = [i8;4] // [] with size is an array
 
 struct Foo {

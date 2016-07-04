@@ -34,34 +34,6 @@ class SquidGrammar(Grammar):
     def on_check_types(self, context):
         return None
 
-class SquidBinExpr(SquidGrammar):
-    def count_rhs(self):
-        return len(self.elements[1].elements)
-
-    def get_rhs(self, i):
-        return self.elements[1][i].elements[1]
-
-    def get_lhs(self):
-        return self.elements[0]
-
-    def get_op(self):
-        return self.elements[1][0].elements[0]
-
-    def on_build_types(self, context):
-        print("building binexpr types")
-        pass
-
-    def on_check_types(self, context):
-        t1 = self.get_lhs().get_type()
-
-        for i in range(self.count_rhs()):
-            t2 = self.get_rhs(i).get_type()
-            if t1 != t2:
-                pass
-                #raise TypeError("types don't match: " + str(t1) + " and " + str(t2))
-
-        return t1
-
 
 grammar_whitespace_mode = 'optional'
 
@@ -109,20 +81,34 @@ class StringLiteral(SquidGrammar):
 
 class UnitTupleLiteral(SquidGrammar):
     grammar = (L('('), REF('Expr'), L(','), L(')'))
-    grammar_collapse=True
 
 class NaryTupleLiteral(SquidGrammar):
     grammar = (L('('), LIST_OF(REF('Expr'), min=2), L(')'))
-    grammar_collapse=True
 
 class TupleLiteral(SquidGrammar):
     grammar = (NaryTupleLiteral | UnitTupleLiteral)
+
+    def on_check_types(self, context):
+        return squid_types.Tuple(map(lambda e: e.get_type(), self[0].find_all(Expr)))
+
+    def generate_ir(self, context, builder):
+        value = tuple(map(lambda e: e.generate_ir(context, builder), self[0].find_all(Expr)))
+        return ir.Constant(self._type.llvm_type(), value)
 
 class ArgsTupleLiteral(SquidGrammar):
     grammar = (L('('), LIST_OF(REF('Expr'), min=0), L(')'))
 
 class ArrayLiteral(SquidGrammar):
     grammar = (L('['), LIST_OF(REF('Expr'), min=0), L(']'))
+
+    def on_check_types(self, context):
+        types = list(map(lambda e: e.get_type(), self[1].find_all(Expr)))
+        # TODO all types should match
+        return squid_types.Array(types[0], len(types))
+
+    def generate_ir(self, context, builder):
+        value = list(map(lambda e: e.generate_ir(context, builder), self[1].find_all(Expr)))
+        return ir.Constant(self._type.llvm_type(), value)
 
 class MapLiteral(SquidGrammar):
     grammar = (L('{'), LIST_OF(REF('Expr'), L(':'), REF('Expr')), L('}'))
@@ -197,7 +183,16 @@ class TypeFunction(SquidType):
         return squid_types.Function(ret, map(lambda a: a.construct(context), arg_types))
 
 class TypeArray(SquidType):
+    grammar = (L('['), REF('TypeExpr'), L(';'), NumberLiteral, L(']'))
+
+    def construct(self, context):
+        return squid_types.Array(self[1].construct(context), int(self[3].string))
+
+class TypeBox(SquidType):
     grammar = (L('['), REF('TypeExpr'), L(']'))
+
+    def construct(self, context):
+        return squid_types.Box(self[1].construct(context))
 
 class TypeUnitTuple(SquidType):
     grammar = (L('('), REF('TypeExpr'), L(','), L(')'))
@@ -219,7 +214,7 @@ class TypeTuple(SquidType):
         return  self[0].construct(context)
 
 class TypeExpr(SquidType):
-    grammar = (TypeName | TypeConstructor | TypeTuple | TypeArray | TypeFunction)
+    grammar = (TypeName | TypeConstructor | TypeTuple | TypeBox | TypeArray | TypeFunction)
 
     def construct(self, context):
         return self[0].construct(context)
@@ -236,36 +231,19 @@ class Identifier(SquidGrammar):
     grammar = (WORD('A-Za-z', 'A-Za-z0-9'))
 
 class Binding(SquidGrammar):
-    grammar = (Identifier, OPTIONAL((L(':'), TypeExpr)))
+    grammar = (Identifier, L(':'), TypeExpr)
 
     def get_name(self):
         return self[0].string
-
-    def get_type(self):
-        if self[1]:
-            return self[1][1]
-        else:
-            return None
     
     def on_check_types(self, context):
-        if self[1]:
-            context.values().bind(self[0].string, scope.Symbol(symtype=self[1][1].construct(context)))
-        else:
-            context.values().bind(self[0].string, scope.Symbol())
-
-        self._context = context
-        return context.values().lookup(self[0].string)._symtype
-
-    def set_type(self, t):
-        self._type = t
-        self._context.values().lookup(self[0].string)._symtype = t
+        return self[2].construct(context)
 
 class ArgList(SquidGrammar):
-    grammar = (L('('), LIST_OF(Identifier, min=0), L(')'))
+    grammar = (L('('), LIST_OF(Binding, min=0), L(')'))
 
     def on_build_types(self, context):
-        for arg in self[1].find_all(Identifier):
-            return context.bind(arg.string, None)
+        pass
 
 class Variable(SquidGrammar):
     grammar = (Identifier)
@@ -279,18 +257,27 @@ class Variable(SquidGrammar):
 #------------------------------
 
 class CallExpr(SquidGrammar):
-    grammar = (Identifier, ArgsTupleLiteral)
+    # TODO fix left-recursion for first-class functions
+    grammar = (Variable, ArgsTupleLiteral)
 
     def on_check_types(self, context):
         func = context.values().lookup(self[0].string)
         return func._symtype._return_type
 
     def generate_ir(self, context, builder):
-        print("calling function" + self[0].string)
-        #return self[1].generate_ir(context, builder)
+        func = context.values().lookup(self[0].string)._symvalue
+        return builder.call(func, map(lambda a: a.generate_ir(context, builder), self[1].find_all(Expr)))
 
 class IndexExpr(SquidGrammar):
-    grammar = (Identifier, ArrayLiteral)
+    grammar = (Variable, ArrayLiteral)
+
+    def on_check_types(self, context):
+        print("array type:", self[0].get_type())
+        return self[0].get_type()
+
+    def generate_ir(self, context, builder):
+        ref = context.values().lookup(self[0].string)._symvalue
+        return builder.extract_value(builder.load(ref), 2)
 
 class GroupExpr(SquidGrammar):
     grammar = (L('('), REF('Expr'), L(')'))
@@ -329,7 +316,7 @@ class BinOp(SquidGrammar):
 #------------------------------
 
 class BinTerm(SquidGrammar):
-    grammar = (SquidLiteral | Variable | UnExpr | CallExpr | IndexExpr | GroupExpr)
+    grammar = (SquidLiteral | Variable | UnExpr | GroupExpr | CallExpr | IndexExpr)
 
     def on_check_types(self, context):
         return self[0].get_type()
@@ -340,7 +327,7 @@ class BinTerm(SquidGrammar):
     def generate_ir(self, context, builder):
         return self[0].generate_ir(context, builder)
 
-class BinExpr(SquidBinExpr):
+class BinExpr(SquidGrammar):
     grammar = (BinTerm, ONE_OR_MORE(BinOp, BinTerm))
     # TODO Lookup should be by operator AND the types being operated on
     ops = {
@@ -358,6 +345,31 @@ class BinExpr(SquidBinExpr):
             val2 = op[1].generate_ir(context, builder)
             val = BinExpr.ops[op[0].string](builder, val, val2)
         return val
+
+    def count_rhs(self):
+        return len(self.elements[1].elements)
+
+    def get_rhs(self, i):
+        return self.elements[1][i].elements[1]
+
+    def get_lhs(self):
+        return self.elements[0]
+
+    def get_op(self):
+        return self.elements[1][0].elements[0]
+
+    def on_build_types(self, context):
+        pass
+
+    def on_check_types(self, context):
+        t1 = self.get_lhs().get_type()
+
+        for i in range(self.count_rhs()):
+            t2 = self.get_rhs(i).get_type()
+            if t1 != t2:
+                raise TypeError("types don't match: " + str(t1) + " and " + str(t2))
+
+        return t1
 
 #------------------------------
 
@@ -379,11 +391,9 @@ class LetDeclaration(SquidGrammar):
         t1 = self[1].get_type()
         t2 = self[3].get_type()
         if t1 and t2 and t1 != t2:
-            pass
-            #raise TypeError("types don't match: " + t1._name + " and " + t2._name)
-        
-        if not t1:
-            self[1].set_type(t2)
+            raise TypeError("types don't match: " + t1._name + " and " + t2._name)
+
+        context.values().bind(self[1].get_name(), scope.Symbol(symtype=t1))
 
         return None
 
@@ -396,20 +406,38 @@ class LetDeclaration(SquidGrammar):
 class VarDeclaration(SquidGrammar):
     grammar = (L('var'), Binding, L('='), Expr)
 
+
 class FnDeclaration(SquidGrammar):
-    grammar = (L('fn'), Identifier, FunctionLiteral)
+    grammar = (L('fn'), Identifier, ArgList, OPTIONAL(L('->'), TypeExpr), OPTIONAL(REF('Block')))
+    grammar_tags = ("scope",)
+
+    def on_declaration_pass(self, context):
+        self._context = scope.Context(parent=context)
+        return self._context
 
     def on_check_types(self, context):
-        context.values().bind(self[1].string, scope.Symbol(symtype=self[2].get_type()))
-        return self[2].get_type()
+        ret = squid_types.Void()
+        if self[3]:
+            ret = self[3][1].construct(context)  
+        args = map(lambda t: t.get_type(), self[2].find_all(Binding))
+        t = squid_types.Function(ret, args)
+
+        context.values().bind(self[1].string, scope.Symbol(symtype=t))
+
+        return t
 
     def generate_ir(self, context, builder):
-        print("gen fn")
-        print(self[2])
-        self[2].generate_ir(context, builder, self[1].string)
+        function = self.get_type().instantiate(self[1].string, builder)
+        context.values().lookup(self[1].string)._symvalue = function
+        if self[4]:
+            self[4].generate_ir(context, function)
 
 class Assignment(SquidGrammar):
     grammar = (Variable, L('='), Expr)
+
+    def generate_ir(self, context, builder):
+        # allocate a place on the stack for our var we are declaring
+        builder.store(self[2].generate_ir(context, builder), context.values().lookup(self[0].string)._symvalue)
 
 class Return(SquidGrammar):
     grammar = (L('return'), Expr)
