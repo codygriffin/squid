@@ -10,6 +10,8 @@ import llvmlite.binding as llvm
 # linker cmd: ld -o output output.o -read_only_relocs suppress -lc -lcrt1.o
 program = \
 """
+module main;
+
 fn puts(str: [i8;6]) -> i32;
 
 fn main () -> i32 {

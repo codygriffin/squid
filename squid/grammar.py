@@ -432,6 +432,21 @@ class FnDeclaration(SquidGrammar):
         if self[4]:
             self[4].generate_ir(context, function)
 
+class ModuleDeclaration(SquidGrammar):
+    grammar = (L('module'), Identifier)
+
+    def generate_ir(self, context, builder):
+        pass
+
+class Declaration(SquidGrammar):
+    grammar = (FnDeclaration | VarDeclaration | LetDeclaration | TypeDeclaration | ModuleDeclaration)
+
+    def generate_ir(self, context, builder):
+        self[0].generate_ir(context, builder)
+
+
+#------------------------------
+
 class Assignment(SquidGrammar):
     grammar = (Variable, L('='), Expr)
 
@@ -453,12 +468,6 @@ class Comment(Grammar):
 
     def generate_ir(self, context, builder):
         return None
-
-class Declaration(SquidGrammar):
-    grammar = (FnDeclaration | VarDeclaration | LetDeclaration | TypeDeclaration)
-
-    def generate_ir(self, context, builder):
-        self[0].generate_ir(context, builder)
 
 class Else(SquidGrammar):
     grammar = (L('else'), REF('Block'))
@@ -507,7 +516,10 @@ class Module(SquidGrammar):
         return self._context
 
     def generate_ir(self, context, builder):
-        self._llvm_module = ir.Module()
+        names = self.find_all(ModuleDeclaration)
+        if len(names) != 1:
+            raise Exception('Module must have exactly one module declaration')
+        self._llvm_module = ir.Module(name=names[0][1].string)
     
         for f in self.find_all(Declaration):
             f.generate_ir(context, self._llvm_module)
