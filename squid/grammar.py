@@ -277,7 +277,7 @@ class IndexExpr(SquidGrammar):
 
     def generate_ir(self, context, builder):
         ref = context.values().lookup(self[0].string)._symvalue
-        return builder.extract_value(builder.load(ref), 2)
+        return builder.gep(ref, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
 
 class GroupExpr(SquidGrammar):
     grammar = (L('('), REF('Expr'), L(')'))

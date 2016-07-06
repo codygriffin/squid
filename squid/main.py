@@ -2,7 +2,7 @@ from grammar import *
 from scope import *
 from squid_types import *
 
-import sys
+import subprocess
 
 from llvmlite import ir
 import llvmlite.binding as llvm
@@ -12,14 +12,14 @@ program = \
 """
 module main;
 
-fn puts(str: [i8;6]) -> i32;
+fn puts(str: [i8]) -> i32;
 
 fn main () -> i32 {
     let x : i32 = 8;
     let y : i32 = 4;
-    if (x != y) {
-        let s : [i8;5] = "hello";
-        puts(s);
+    if (x != (y * x)) {
+        let s : [i8;17] = "hello from squid!";
+        puts(s[0]);
         return x*y;
     };
     return 0;
@@ -71,17 +71,22 @@ if __name__ == '__main__':
 
         print("Dumping IR:")
         print(str(module))
+        module.triple = "x86_64-apple-darwin14.5.0"
 
-        # Print the module IR
-        llvm.initialize()
-        llvm.initialize_native_target()
-        llvm.initialize_native_asmprinter()
+       # llvm.initialize()
+       # llvm.initialize_native_target()
+       # llvm.initialize_native_asmprinter()
 
-        llvm_main = llvm.parse_assembly(str(module))
-        tm = llvm.Target.from_default_triple().create_target_machine()
+       # llvm_main = llvm.parse_assembly(str(module))
+       # tm = llvm.Target.from_default_triple().create_target_machine()
     
-        with open('output.o', 'wb') as f:
-            f.write(tm.emit_object(llvm_main))
+       # with open('output.o', 'wb') as f:
+       #     f.write(tm.emit_object(llvm_main))
+
+        with open('output.ir', 'wb') as f:
+            f.write(str(module).encode('ascii'))
+
+        subprocess.call(['/usr/local/opt/llvm/bin/lli', 'output.ir'])
 
     except Exception as e:
         print(e)
