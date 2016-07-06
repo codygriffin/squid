@@ -15,14 +15,8 @@ module main;
 fn puts(str: [i8]) -> i32;
 
 fn main () -> i32 {
-    let x : i32 = 8;
-    let y : i32 = 4;
-    if (x != (y * x)) {
-        let s : [i8;17] = "hello from squid!";
-        puts(s[0]);
-        return x*y;
-    };
-    return 0;
+  let s : [i8;17] = "hello from squid!";
+  return puts(s[0]);
 };
 
 """
