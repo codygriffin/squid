@@ -1,10 +1,9 @@
 from modgrammar import *
 import scope 
 import squid_types
+import re
 
 from llvmlite import ir
-
-i8 = ir.IntType(8)
 
 class SquidGrammar(Grammar):
     def declaration_pass(self, ns):
@@ -140,7 +139,7 @@ class FunctionLiteral(SquidGrammar):
 
         self._llvm_arg_types = ()
         for a in self[0].find_all(Identifier):
-            args = args + (i8,)
+            args = args + ()
 
         return None
 
@@ -164,11 +163,15 @@ class SquidType(SquidGrammar):
     def construct(self, context, *params):
         return None
 
-class TypeName(SquidType):
-    grammar = (REF('Identifier'), OPTIONAL('<', LIST_OF(REF('Identifier')),'>'))
+class TypeConstructor(SquidType):
+    grammar = (Identifier, 
+      OPTIONAL(L('<'), LIST_OF(Identifier, min=0), L('>'))) 
 
     def name(self):
-        return self[0].string;
+        suffix = ''
+        for i, p in enumerate(self.params()):
+          suffix += '_' + str(i)
+        return self[0].string + suffix;
 
     def params(self):
         if self[1]:
@@ -178,13 +181,13 @@ class TypeName(SquidType):
 
     def construct(self, context, *params):
         if not self[1]:
-            return context.types().lookup(self[0].string)
+            return context.types().lookup(self.name())
         else:
             params = list(map(lambda t: context.types().lookup(t), self.params()))
-            return context.types().lookup(self[0].string)(*params)
-
-class TypeConstructor(SquidType):
-    grammar = (TypeName, OPTIONAL('<', LIST_OF(REF('TypeExpr')),'>'))
+            print(self.name())
+            print(context.types()._symbols)
+            print(context.types().lookup(self.name()))
+            return context.types().lookup(self.name())(*params)
 
 class TypeGroup(SquidType):
     grammar = (L('('), REF('TypeExpr'), L(')'))
@@ -216,7 +219,7 @@ class TypeUnitTuple(SquidType):
     grammar = (L('('), REF('TypeExpr'), L(','), L(')'))
 
     def construct(self, context, *params):
-        return squid_types.Tuple(self[1].construct(context))
+        return squid_types.Tuple([self[1].construct(context)])
 
 class TypeNaryTuple(SquidType):
     grammar = (L('('), LIST_OF(REF('TypeExpr'), min=2), L(')'))
@@ -231,25 +234,53 @@ class TypeTuple(SquidType):
     def construct(self, context, *params):
         return  self[0].construct(context)
 
+class TypeBinOp(SquidType):
+    grammar = (L('*') | L('-'))
+
+#------------------------------
+
+class TypeBinTerm(SquidType):
+    grammar = (TypeConstructor | TypeTuple | TypeBox | TypeArray | TypeFunction)
+
+    def construct(self, context, *params):
+        return self[0].construct(context)
+
+class TypeBinExpr(SquidType):
+    grammar = (TypeBinTerm, ONE_OR_MORE(TypeBinOp, TypeBinTerm))
+
+    def construct(self, context, *params):
+        val1 = self[0].construct(context)
+        for op in self[1].find_all(Grammar):
+            val2 = op[1].construct(context, params)
+            if op[0].string == '*':
+                return squid_types.Tuple([val1, val2])
+            
+#------------------------------
+
 class TypeExpr(SquidType):
-    grammar = (TypeName | TypeConstructor | TypeTuple | TypeBox | TypeArray | TypeFunction)
+    grammar = (TypeBinExpr | TypeBinTerm)
 
     def construct(self, context, *params):
         return self[0].construct(context)
 
 class TypeDeclaration(SquidGrammar):
-    grammar = (L('type'), TypeName, L('='), TypeExpr)
+    grammar = (L('type'), TypeConstructor, L('='), TypeExpr)
 
     def on_build_types(self, context):
         if len(self[1].params()) == 0:
+            # if we don't have parameters, this is just a simple alias
             return context.types().bind(self[1].name(), self[3].construct(context))
         else:
+            # otherwise, we build a closure which will construct a type 
+            # with parameters
             def type_ctor(*args):
+                # we create a new scope when we define a new type, so we 
+                # can bind free parameters to our arguments
                 type_context = scope.Context(parent=context)
                 for p in self[1].params():
                     type_context.types().bind(p, args[0])
-                print(type_context.types()._symbols)
                 return self[3].construct(type_context, *args)
+
             return context.types().bind(self[1].name(), type_ctor)
 
     def generate_ir(self, context, builder):
@@ -299,7 +330,6 @@ class IndexExpr(SquidGrammar):
     grammar = (Variable, ArrayLiteral)
 
     def on_check_types(self, context):
-        print("array type:", self[0].get_type())
         return self[0].get_type()
 
     def generate_ir(self, context, builder):
@@ -358,12 +388,12 @@ class BinExpr(SquidGrammar):
     grammar = (BinTerm, ONE_OR_MORE(BinOp, BinTerm))
     # TODO Lookup should be by operator AND the types being operated on
     ops = {
-        "+": lambda b, x, y: b.add(x,y),
-        "*": lambda b, x, y: b.mul(x,y),
-        "-": lambda b, x, y: b.sub(x,y),
-        "/": lambda b, x, y: b.sdiv(x,y),
-        "==": lambda b, x, y: b.icmp_signed("==", x,y),
-        "!=": lambda b, x, y: b.icmp_signed("!=", x,y),
+        '+': lambda b, x, y: b.add(x,y),
+        '*': lambda b, x, y: b.mul(x,y),
+        '-': lambda b, x, y: b.sub(x,y),
+        '/': lambda b, x, y: b.sdiv(x,y),
+        '==': lambda b, x, y: b.icmp_signed('==', x,y),
+        '!=': lambda b, x, y: b.icmp_signed('!=', x,y),
     }
 
     def generate_ir(self, context, builder):

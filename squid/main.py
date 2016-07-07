@@ -7,14 +7,20 @@ import subprocess
 from llvmlite import ir
 import llvmlite.binding as llvm
 
+
+#type Power<A, B...> = (A, Power<B...>);
+
 # linker cmd: ld -o output output.o -read_only_relocs suppress -lc -lcrt1.o
 program = \
 """
 module main;
 
+type Power<A> = (A,);
+
 fn puts(str: [i8]) -> i32;
 
 fn main () -> i32 {
+  let x : Power<i32> = (1,);
   let s : [i8;17] = "hello from squid!";
   return puts(s[0]);
 };

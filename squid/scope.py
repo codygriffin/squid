@@ -16,14 +16,14 @@ class Scope(object):
         self._symbols[name] = symbol        
 
     def lookup(self, name):
-        if name not in self._symbols:
-            raise Exception("Unknown symbol: " + name)
-
         result = self._symbols.get(name, None)
 
         # Look up in parent scope if its not here
         if self._parent and not result:
             result = self._parent.lookup(name)
+
+        if not self._parent and not result:
+            raise Exception("Unknown symbol: " + name)
 
         return result 
 
