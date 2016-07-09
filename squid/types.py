@@ -16,6 +16,7 @@ class Void(object):
     def alloca(self, builder):
         return builder.alloca(self.llvm_type())
     
+    # XXX this isn't right
     def __eq__(self, other):
         return self.__class__ == other.__class__
 
@@ -108,6 +109,15 @@ class I64(Void):
     @classmethod
     def llvm_value(self, value):
         return ir.Constant(ir.IntType(64), value);
+
+
+class Float(Void):
+    def llvm_type(self):
+        return ir.FloatType()
+
+    @classmethod
+    def llvm_value(self, value):
+        return ir.Constant(ir.FloatType(), value);
 
 
 class Array(Void):

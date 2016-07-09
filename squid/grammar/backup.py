@@ -1,7 +1,7 @@
 from modgrammar import *
-import scope 
-import squid_types
-import re
+from squid import scope, squid_types
+
+from squid.grammar import literals, identifiers, expressions, statements
 
 from llvmlite import ir
 

@@ -1,27 +1,26 @@
-from grammar import *
-from scope import *
-from squid_types import *
+from modgrammar import Grammar
 
+from squid.grammar.modules import Module
+from squid.scope import *
+from squid.types import *
+
+import sys
 import subprocess
 
 from llvmlite import ir
 import llvmlite.binding as llvm
 
 
-#type Power<A, B...> = (A, Power<B...>);
 
 # linker cmd: ld -o output output.o -read_only_relocs suppress -lc -lcrt1.o
 program = \
 """
 module main;
 
-type Power<A> = (A,);
-
 fn puts(str: [i8]) -> i32;
 
 fn main () -> i32 {
-  let x : Power<i32> = (1,);
-  let s : [i8;17] = "hello from squid!";
+  let s = "hello from squid!";
   return puts(s[0]);
 };
 
@@ -44,30 +43,26 @@ if __name__ == '__main__':
         result = parser.parse_text(program, eof=True)
         
         # Pass over AST and fill out namespaces
-        result.declaration_pass(root)
+        #result.declaration_pass(root)
 
         # Pass over AST and check types
-        result.check_types(root)
+        #result.check_types(root)
 
         # Pass over AST and generate IR
-        module = result.generate_ir(root, None)
+        #module = result.generate_ir(root, None)
 
         def dump_ast(r, i=0):
             print(str(str(type(r)) + ": " + r.string).rjust(i*4))
-            for f in r.find_all(SquidGrammar):
+            for f in r.find_all(Grammar):
                 dump_ast(f, i+1)
 
         print("Dumping AST:")
-        #print(dump_ast(result))
+        print(dump_ast(result))
 
-        def dump_symbols(r):
-            print(r._context)
-            for f in r.find_all("namespace"):
-                dump_symbols(f)
+        sys.exit(1)
+
 
         print("Dumping Symbols:")
-        print(root)
-        dump_symbols(result)
 
         print("Dumping IR:")
         print(str(module))

@@ -1,11 +1,82 @@
-class SquidExpr():
+from modgrammar import *
+from squid import types
+
+from squid.grammar import *
+from squid.grammar.identifiers import Identifier
+from squid.grammar.literals import Literal
+
+grammar_whitespace_mode = 'optional'
+
+class SquidExpr(Grammar, Typed, Compiled):
+    '''
+    Expressions have a type, and ultimately get
+    turned into code.
+
+    Because expressions can have variables, they must 
+    be looked at in a context (symbol table and type
+    environement, for example)
+    
+    Examples of expressions include binary/unary 
+    operators, indexing, function application
+    and even just simple literals.  Essentially,
+    anything which evaluates to a value at run-time.
+    '''
+    def get_type(self, type_env=None):
+        return types.Void()
+
+
+class SquidAggregate(SquidExpr):
+    '''
+    Aggregates are collections of expressions.
+
+    On top of normal expression operations, aggregates
+    can be queried by an index
+    '''
     pass
 
-#------------------------------
+class Variable(SquidExpr):
+    grammar = (Identifier)
 
-class CallExpr(SquidGrammar):
-    # TODO fix left-recursion for first-class functions
-    grammar = (Variable, ArgsTupleLiteral)
+    def get_type(self, context):
+        # look up type in type environment
+        return context.values().lookup(self[0].string)._symtype
+
+    def generate_ir(self, context, builder):
+        return builder.load(context.values().lookup(self[0].string)._symvalue)
+
+class UnitTuple(SquidAggregate):
+    grammar = (L('('), REF('Expr'), L(','), L(')'))
+    grammar_collapse=True
+
+class NaryTuple(SquidAggregate):
+    grammar = (L('('), LIST_OF(REF('Expr'), min=2), L(')'))
+    grammar_collapse=True
+
+class Tuple(SquidAggregate):
+    grammar = (NaryTuple | UnitTuple)
+
+    def get_type(self):
+        types = map(lambda e: e.get_type(), self[0].find_all(Expr))
+        return squid_types.Tuple(types)
+
+class Array(SquidAggregate):
+    grammar = (L('['), LIST_OF(REF('Expr'), min=0), L(']'))
+
+    def get_type(self):
+        types = list(map(lambda e: e.get_type(), self[1].find_all(Expr)))
+        # TODO all types should match
+        return squid_types.Array(types[0], len(types))
+
+class ArgsTuple(Grammar):
+    grammar = (L('('), LIST_OF(REF('Expr'), min=0), L(')'))
+
+class Aggregate(SquidAggregate):
+    grammar = (Tuple | Array)
+    grammar_collapse=True
+
+class CallExpr(SquidExpr):
+    # TODO fix left-recursion 
+    grammar = (Variable, ArgsTuple)
 
     def on_check_types(self, context):
         func = context.values().lookup(self[0].string)
@@ -15,8 +86,9 @@ class CallExpr(SquidGrammar):
         func = context.values().lookup(self[0].string)._symvalue
         return builder.call(func, map(lambda a: a.generate_ir(context, builder), self[1].find_all(Expr)))
 
-class IndexExpr(SquidGrammar):
-    grammar = (Variable, ArrayLiteral)
+class IndexExpr(SquidExpr):
+    # TODO fix left-recursion 
+    grammar = (Variable, Array)
 
     def on_check_types(self, context):
         return self[0].get_type()
@@ -25,7 +97,7 @@ class IndexExpr(SquidGrammar):
         ref = context.values().lookup(self[0].string)._symvalue
         return builder.gep(ref, [ir.Constant(ir.IntType(32), 0)] + self[1].as_list(context, builder))
 
-class GroupExpr(SquidGrammar):
+class GroupExpr(SquidExpr):
     grammar = (L('('), REF('Expr'), L(')'))
 
     def on_check_types(self, context):
@@ -36,19 +108,19 @@ class GroupExpr(SquidGrammar):
 
 #------------------------------
 
-class UnaryPreOp(SquidGrammar):
+class UnaryPreOp(SquidExpr):
     grammar = (L('-') | L('*') | L('~') | L('!'))
 
-class UnaryPreOpExpr(SquidGrammar):
+class UnaryPreOpExpr(SquidExpr):
     grammar = (UnaryPreOp, REF('Expr'))
     grammar_collapse=True
 
-class UnExpr(SquidGrammar):
+class UnExpr(SquidExpr):
     grammar = (UnaryPreOpExpr)
 
 #------------------------------
 
-class BinOp(SquidGrammar):
+class BinOp(SquidExpr):
     grammar = (L('*') | L('/') | L('%') |
                L('+') | L('-') |
                L('<<') | L('>>') |
@@ -61,8 +133,8 @@ class BinOp(SquidGrammar):
 
 #------------------------------
 
-class BinTerm(SquidGrammar):
-    grammar = (SquidLiteral | Variable | UnExpr | GroupExpr | CallExpr | IndexExpr)
+class BinTerm(SquidExpr):
+    grammar = (Literal | Variable | Aggregate | UnExpr | GroupExpr | CallExpr | IndexExpr)
 
     def on_check_types(self, context):
         return self[0].get_type()
@@ -73,7 +145,7 @@ class BinTerm(SquidGrammar):
     def generate_ir(self, context, builder):
         return self[0].generate_ir(context, builder)
 
-class BinExpr(SquidGrammar):
+class BinExpr(SquidExpr):
     grammar = (BinTerm, ONE_OR_MORE(BinOp, BinTerm))
     # TODO Lookup should be by operator AND the types being operated on
     ops = {
@@ -119,7 +191,7 @@ class BinExpr(SquidGrammar):
 
 #------------------------------
 
-class Expr(SquidGrammar):
+class Expr(SquidExpr):
     grammar = (BinExpr | BinTerm)
 
     def on_check_types(self, context):
