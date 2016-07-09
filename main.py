@@ -3,6 +3,7 @@ from modgrammar import Grammar
 from squid.grammar.modules import Module
 from squid.scope import *
 from squid.types import *
+from squid.hm import *
 
 import sys
 import subprocess

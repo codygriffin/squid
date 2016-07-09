@@ -1,14 +1,23 @@
 from llvmlite import ir
 
-class Void(object):
+from squid.symbols.symbol_table import SymbolTable
+
+# XXX notes from http://dev.stephendiehl.com/fun/006_hindley_milner.html
+class TypeEnvironment(SymbolTable):
     '''
-    Void is our unit type - all types are sub-types of
+    The type environment maps identifiers to types.
+    '''
+    pass
+
+class Type(object):
+    '''
+    Type is our unit type - all types are sub-types of
     void.  Statements all return void.
 
-    Void has no values.
+    Type has no values.
     '''
     def llvm_type(self):
-        return ir.VoidType()
+        pass
 
     def get_size(self, m):
         return self.llvm_type().get_abi_size(m)
@@ -24,7 +33,8 @@ class Void(object):
 class TypeVariable(object):
     '''
     A TypeVariable is used to fill out the type environment
-    while performing type inference.
+    while performing type inference, or as place-holders for
+    parameterized types.
 
     TypeVariables are numbered starting from 0, and have a 
     string "name" as %0, %1, etc
@@ -39,6 +49,7 @@ class TypeVariable(object):
     def name(self):
         return "%" + str(self._id)
 
+
 class TypeConstructor(object):
     '''
     A TypeConstructor builds a new type from existing types
@@ -48,7 +59,7 @@ class TypeConstructor(object):
 
 
 # TODO should be a TypeConstructor (creates function types from ret/args types)
-class Function(Void):
+class Function(Type):
     def __init__(self, ret, args):
         self._return_type = ret
         self._arg_tuple = args 
@@ -63,7 +74,15 @@ class Function(Void):
         return ir.Function(builder, self.llvm_type(), name)
 
 
-class Bool(Void):
+class Void(Type):
+    def llvm_type(self):
+        return ir.VoidType()
+    
+    @classmethod
+    def llvm_value(self, value):
+        raise Exception("No value for void")
+
+class Bool(Type):
     def llvm_type(self):
         return ir.IntType(1)
     
@@ -75,7 +94,7 @@ class Bool(Void):
             return ir.Constant(ir.IntType(1), 0);
 
 
-class I8(Void):
+class I8(Type):
     def llvm_type(self):
         return ir.IntType(8)
 
@@ -84,7 +103,7 @@ class I8(Void):
         return ir.Constant(ir.IntType(8), value);
 
 
-class I16(Void):
+class I16(Type):
     def llvm_type(self):
         return ir.IntType(16)
 
@@ -93,7 +112,7 @@ class I16(Void):
         return ir.Constant(ir.IntType(16), value);
 
 
-class I32(Void):
+class I32(Type):
     def llvm_type(self):
         return ir.IntType(32)
 
@@ -102,7 +121,7 @@ class I32(Void):
         return ir.Constant(ir.IntType(32), value);
 
 
-class I64(Void):
+class I64(Type):
     def llvm_type(self):
         return ir.IntType(64)
 
@@ -111,7 +130,7 @@ class I64(Void):
         return ir.Constant(ir.IntType(64), value);
 
 
-class Float(Void):
+class Float(Type):
     def llvm_type(self):
         return ir.FloatType()
 
@@ -120,7 +139,7 @@ class Float(Void):
         return ir.Constant(ir.FloatType(), value);
 
 
-class Array(Void):
+class Array(Type):
     def __init__(self, t, count):
         self._type = t
         self._count = count
@@ -131,7 +150,7 @@ class Array(Void):
     def alloca(self, builder):
         return builder.alloca(self.llvm_type(), self._count)
 
-class Box(Void):
+class Box(Type):
     def __init__(self, t):
         self._type = t
 
@@ -142,7 +161,7 @@ class Box(Void):
         return builder.alloca(self.llvm_type())
 
 
-class Tuple(Void):
+class Tuple(Type):
     def __init__(self, types):
         self._types = list(types)
 
