@@ -1,6 +1,7 @@
 from modgrammar import *
 
 from squid import scope
+from squid import types
 from squid.grammar import *
 from squid.grammar.identifiers import Identifier
 from squid.grammar.expressions import Expr, Variable
@@ -21,8 +22,14 @@ class SquidStatement(Grammar, Compiled):
     pass
 
 
-class Binding(Grammar):
+class Binding(Grammar, Typed):
     grammar = (Identifier, OPTIONAL(L(':'), TypeExpr))
+    
+    def infer_type(self, type_env):
+        binding_type = types.TypeVariable()
+        # TODO construct the type when annotated
+        type_env.extend(self.get_name(), binding_type)
+        return ({}, binding_type)
 
     def get_name(self):
         return self[0].string
@@ -34,8 +41,23 @@ class Binding(Grammar):
 class ArgList(Grammar):
     grammar = (L('('), LIST_OF(Binding, min=0), L(')'))
 
-class LetDeclaration(SquidStatement):
+class LetDeclaration(SquidStatement, Typed):
     grammar = (L('let'), Binding, L('='), Expr)
+
+    def infer_type(self, type_env):
+        print("infering let decl")
+        subst = {}
+        subst_binding, binding_type = self[1].infer_type(type_env)
+        subst.update(subst_binding)
+        
+        subst_exp, exp_type = self[3].infer_type(type_env)
+        subst.update(subst_exp)
+        
+        subst.update(types.unify(binding_type, exp_type))
+        # unify with identifier type
+    
+        return (subst, None)
+
 
     def on_check_types(self, context):
         t1 = self[1].get_type()
@@ -59,6 +81,31 @@ class VarDeclaration(SquidStatement):
 class FnDeclaration(SquidStatement):
     grammar = (L('fn'), Identifier, ArgList, OPTIONAL(L('->'), TypeExpr), OPTIONAL(REF('Block')))
     grammar_tags = ("scope",)
+
+    def infer_type(self, type_env):
+        print("infering fn decl")
+        subst = {}
+        fn_type = types.TypeVariable()
+        type_env.extend(self[1].string, fn_type)
+
+        fn_env = type_env.substitute({}, copy=True)
+
+        ret_type = types.TypeVariable()
+        arg_types = []
+        for arg in self[2].find_all(Binding):
+            subst_binding, binding_type = arg.infer_type(fn_env)
+            subst.update(subst_binding)
+            arg_types = arg_types + [binding_type]
+            subst.update(types.unify(fn_type, types.Function(ret_type, arg_types)))
+
+        if self[4]:
+            subst_body, body_type = self[4].infer_type(fn_env)
+            subst.update(subst_body)
+            subst.update(types.unify(ret_type, body_type))
+        
+        # unify with identifier type
+    
+        return (subst, None)
 
     def declaration_pass(self, ns):
         ns = self.on_declaration_pass(ns)
@@ -131,6 +178,15 @@ class Assignment(SquidStatement):
 class Return(SquidStatement):
     grammar = (L('return'), Expr)
 
+    def infer_type(self, type_env):
+        print("infering return")
+        subst = {}
+        ret_type = types.TypeVariable()
+        subst_exp, exp_type = self[1].infer_type(type_env)
+        subst.update(subst_exp)
+        subst.update(types.unify(ret_type, exp_type))
+        return (subst, ret_type)
+
     def on_check_types(self, context):
         return self[1].get_type()
 
@@ -166,8 +222,46 @@ class If(SquidStatement):
         with builder.if_then(cond):
             self[2].generate_ir(context, None, block=builder)
 
-class Block(SquidStatement):
+class Block(SquidStatement, Typed):
     grammar = (L('{'), ZERO_OR_MORE(REF('Statement')), L('}'))
+
+    def infer_type(self, type_env):
+        print("infering block")
+
+        subst = {}
+
+        fns = self[1].find_all(FnDeclaration)
+        lets = self[1].find_all(LetDeclaration)
+        exprs = self[1].find_all(Expr)
+        rets = self[1].find_all(Return)
+    
+        for fn in fns:
+            print("fn in block")
+            print(fn)
+            subst_fn, _ = fn.infer_type(type_env)
+            subst.update(subst_fn)
+
+        for let in lets:
+            print("let in block")
+            print(let)
+            subst_let, _ = let.infer_type(type_env)
+            subst.update(subst_let)
+
+        for expr in exprs:
+            print("expr in block")
+            print(expr)
+            subst_expr, _ = expr.infer_type(type_env)
+            subst.update(subst_expr)
+
+        ret_type = None
+        for ret in rets:
+            print("ret in block")
+            print(ret)
+            subst_ret, ret_type = ret.infer_type(type_env)
+            subst.update(subst_ret)
+
+        # TODO sum types
+        return (subst, ret_type)
 
     def declaration_pass(self, ns):
         ns = self.on_declaration_pass(ns)

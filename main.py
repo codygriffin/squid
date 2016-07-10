@@ -1,9 +1,10 @@
 from modgrammar import Grammar
 
 from squid.grammar.modules import Module
+from squid.grammar.expressions import *
+from squid.grammar.statements import *
 from squid.scope import *
 from squid.types import *
-from squid.hm import *
 
 import sys
 import subprocess
@@ -35,10 +36,10 @@ if __name__ == '__main__':
         root = Context()
 
         root.types().bind("void", Void())
-        root.types().bind("i8", I8())
-        root.types().bind("i16", I16())
-        root.types().bind("i32", I32())
-        root.types().bind("i64", I64())
+        root.types().bind("i8", Int(8))
+        root.types().bind("i16", Int(16))
+        root.types().bind("i32", Int(32))
+        root.types().bind("i64", Int(64))
         root.types().bind("bool", Bool())
 
         result = parser.parse_text(program, eof=True)
@@ -59,6 +60,8 @@ if __name__ == '__main__':
 
         print("Dumping AST:")
         print(dump_ast(result))
+
+        result.infer_type()
 
         sys.exit(1)
 

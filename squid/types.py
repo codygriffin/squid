@@ -1,36 +1,153 @@
+import copy
+import string
+from functools import reduce
 from llvmlite import ir
 
 from squid.symbols.symbol_table import SymbolTable
 
+class Substitutable(object):
+    '''
+    This is a trait describing something can be substituted
+    
+    We can either apply a substitution, or get a list of all
+    the free variables.
+    '''
+    def substitute(self, subst):
+        '''
+        Apply the substitution to the set of free variables
+        '''
+        pass
+
+    def free_type_vars(self):
+        '''
+        Return the set of unbound, free variables 
+        '''
+        pass
+
+
+def unify(t1, t2):
+    '''
+    Find the substitution which unifies two types
+    '''
+    # TODO clean up types?
+    a = t1
+    b = t2
+    print (str(a) + " unifying with " + str(b))
+    if isinstance(a, TypeVariable):
+        if a != b:
+            if a.occurs_in(b):
+                raise Exception("recursive unification")
+            a.instance = b
+            return {a: b}
+    elif isinstance(a, TypeOperator) and isinstance(b, TypeVariable):
+        return unify(b, a)
+    elif isinstance(a, TypeOperator) and isinstance(b, TypeOperator):
+        if a != b:
+            raise Exception("Type mismatch: {0} != {1}".format(str(a), str(b)))
+        subst = {}
+        for p, q in zip(a._params, b._params):
+            subst.update(unify(p, q))
+        return subst
+    elif isinstance(a, int) and isinstance(b, int):
+        if a != b:  
+            raise Exception("Type (int) mismatch: {0} != {1}".format(str(a), str(b)))
+        return {}
+    else:
+        assert 0, "Not unified: {0} != {1}".format(str(a), str(b))
+
 # XXX notes from http://dev.stephendiehl.com/fun/006_hindley_milner.html
-class TypeEnvironment(SymbolTable):
+class TypeEnvironment(Substitutable):
     '''
     The type environment maps identifiers to types.
     '''
-    pass
+    def __init__(self, type_vars={}):
+        self._type_vars = type_vars
 
-class Type(object):
+    def generalize(self, typ):
+        '''
+        '''
+        return TypeOperator(typ, *(typ.free_type_vars() - self.free_type_vars()))
+
+    def extend(self, var, scheme, copy=False):
+        extension = None
+
+        if copy:
+            extension = self._type_vars.copy()
+        else:
+            extension = self._type_vars
+
+        extension.update({
+            var: scheme
+        })
+        return TypeEnvironment(type_vars=extension)
+
+    def restrict(self, var, copy=False):
+        restriction = None
+
+        if copy:
+            restriction = self._type_vars.copy()
+        else:
+            restriction = self._type_vars
+
+        restriction.remove(var)
+        return TypeEnvironment(type_vars=restriction)
+
+    def lookup(self, var):
+        return self._type_vars[var]
+        
+    def each(self, cb):
+        for v, t in self._type_vars.items(): 
+            cb(v, t);
+        
+    def substitute(self, subst, copy=False):
+        substitution = None
+        if copy:
+            substitution = self._type_vars.copy()
+        else:
+            substitution = self._type_vars
+
+        for v, typ in subst.items():
+            substitution[v] = typ.substitute(subst)
+
+        return TypeEnvironment(type_vars=substitution)
+                
+    def free_type_vars(self):
+        free_vars = set([])
+        for k in self._type_vars.values():
+            free_vars = free_vars | k.free_type_vars()
+
+        return free_vars
+
+    def __str__(self):
+        return "\n".join(["\t" + str(v) + " => " + str(t) for v,t in self._type_vars.items()])
+
+class Type(Substitutable):
     '''
     Type is our unit type - all types are sub-types of
     void.  Statements all return void.
 
-    Type has no values.
+    Type has no values. 
     '''
-    def llvm_type(self):
-        pass
+    def unify(self, other):
+        if (self == other):
+            return {}
+        else:
+            raise Exception("Unable to unify types!")
 
-    def get_size(self, m):
-        return self.llvm_type().get_abi_size(m)
+    def __str__(self):
+        return type(self).__name__
 
-    def alloca(self, builder):
-        return builder.alloca(self.llvm_type())
-    
-    # XXX this isn't right
-    def __eq__(self, other):
-        return self.__class__ == other.__class__
+    def substitute(self, subst):
+        return self
+
+    def free_type_vars(self):
+        return set()
+
+    def __hash__(self):
+        return str(self).__hash__()
 
 
-class TypeVariable(object):
+class TypeVariable(Type):
     '''
     A TypeVariable is used to fill out the type environment
     while performing type inference, or as place-holders for
@@ -41,37 +158,100 @@ class TypeVariable(object):
     '''
     next_id = 0
     def __init__(self):
-        self._id = next_id
+        self._id = TypeVariable.next_id
         TypeVariable.next_id += 1
-    
-        self._instance = None
 
-    def name(self):
+    def free_type_vars(self):
+        '''
+        For a type variable, by definition the variable is unbound, so
+        the free variables is just the singleton set containing this 
+        variable
+        '''
+        return set([self])
+
+    def substitute(self, subst):
+        '''
+        Applying substitution to a variable either results in a replacement
+        from the substitution map, or we remain unchanged
+        '''
+        return subst.get(self, self) 
+
+    def occurs_in(self, typ):
+        '''
+        Test if this variable occurs in a type's free variables
+        '''
+        return self in typ.free_type_vars()
+
+    def bind(self, typ):
+        '''
+        Bind this variable to a type
+        '''
+        if self == typ:
+            return {}
+        elif self.occurs_in(typ):
+            raise Exception("Infinite Type!")
+        else:
+            return {self: typ}
+
+    def __hash__(self):
+        return self._id
+
+    def __str__(self):
         return "%" + str(self._id)
 
 
-class TypeConstructor(object):
+class TypeOperator(Type):
     '''
-    A TypeConstructor builds a new type from existing types
+    A TypeOperator builds a new type from existing types
     '''
-    def __init__(self, *params):
-        self._params = params
+    def __init__(self, typ, *params):
+        self._type = typ
+        self._params = list(params)
+
+    def free_type_vars(self):
+        return set(self._type.free_type_vars() - set(self._params))
+
+    def substitute(self, subst):
+        subst_free = {v: subst[v] for v in subst if v not in self._params}
+        return TypeOperator(self._type.substitute(subst_free), self._params)
+
+    def instantiate(self):
+        '''
+        Bind our params, and return the new type 
+        '''
+        return self._type.substitute({p: TypeVariable() for p in self._params})
+
+    def __str__(self):
+        return type(self).__name__ + "<" + ", ".join(map(str, self._params)) + ">"
+
+    def __hash__(self):
+        return str(self).__hash__()
+    
+    def __eq__(self, other):
+        '''
+        Type schemes are equal iff they have the same root type, and the same number
+        of parameters
+        '''
+        if not isinstance(other, TypeOperator):
+            return False
+        return self._type == other._type and len(self._params) == len(other._params)
 
 
-# TODO should be a TypeConstructor (creates function types from ret/args types)
-class Function(Type):
+# TODO should be a TypeOperator (creates function types from ret/args types)
+class Function(TypeOperator):
+    TYPE=Type()
     def __init__(self, ret, args):
-        self._return_type = ret
-        self._arg_tuple = args 
+        self._ret = ret
+        self._args  = args 
+        super().__init__(Function.TYPE, ret, *args)
 
-    def llvm_type(self):
-        return ir.FunctionType(self._return_type.llvm_type(), tuple(map(lambda e: e.llvm_type(), self._arg_tuple)))
+    def free_type_vars(self):
+        args = list(map(lambda t: t.free_type_vars(), self._args))
+        return self._ret.free_type_vars() | reduce(set.union, args, set())
 
-    def alloca(self, builder):
-        return None
-
-    def instantiate(self, name, builder):
-        return ir.Function(builder, self.llvm_type(), name)
+    def substitute(self, subst):
+        args = list(map(lambda t: t.substitute(subst), self._args))
+        return Function(self._ret.substitute(subst), args)
 
 
 class Void(Type):
@@ -82,7 +262,14 @@ class Void(Type):
     def llvm_value(self, value):
         raise Exception("No value for void")
 
-class Bool(Type):
+class Bool(TypeOperator):
+    TYPE=Type()
+    def __init__(self):
+        super().__init__(Bool.TYPE)
+
+    def substitute(self, subst):
+        return self
+
     def llvm_type(self):
         return ir.IntType(1)
     
@@ -94,25 +281,14 @@ class Bool(Type):
             return ir.Constant(ir.IntType(1), 0);
 
 
-class I8(Type):
-    def llvm_type(self):
-        return ir.IntType(8)
+class Int(TypeOperator):
+    TYPE=Type()
+    def __init__(self, size=32):
+        super().__init__(Int.TYPE, size)
 
-    @classmethod
-    def llvm_value(self, value):
-        return ir.Constant(ir.IntType(8), value);
+    def substitute(self, subst):
+        return self
 
-
-class I16(Type):
-    def llvm_type(self):
-        return ir.IntType(16)
-
-    @classmethod
-    def llvm_value(self, value):
-        return ir.Constant(ir.IntType(16), value);
-
-
-class I32(Type):
     def llvm_type(self):
         return ir.IntType(32)
 
@@ -120,17 +296,14 @@ class I32(Type):
     def llvm_value(self, value):
         return ir.Constant(ir.IntType(32), value);
 
+class Float(TypeOperator):
+    TYPE=Type()
+    def __init__(self):
+        super().__init__(Float.TYPE)
 
-class I64(Type):
-    def llvm_type(self):
-        return ir.IntType(64)
+    def substitute(self, subst):
+        return self
 
-    @classmethod
-    def llvm_value(self, value):
-        return ir.Constant(ir.IntType(64), value);
-
-
-class Float(Type):
     def llvm_type(self):
         return ir.FloatType()
 
@@ -139,10 +312,15 @@ class Float(Type):
         return ir.Constant(ir.FloatType(), value);
 
 
-class Array(Type):
+class Array(TypeOperator):
+    TYPE=Type()
     def __init__(self, t, count):
         self._type = t
         self._count = count
+        super().__init__(Array.TYPE, t, count)
+
+    def substitute(self, subst):
+        return self
 
     def llvm_type(self):
         return ir.ArrayType(self._type.llvm_type(), self._count)
@@ -150,9 +328,11 @@ class Array(Type):
     def alloca(self, builder):
         return builder.alloca(self.llvm_type(), self._count)
 
-class Box(Type):
+class Box(TypeOperator):
+    TYPE=Type()
     def __init__(self, t):
         self._type = t
+        super().__init__(Box.TYPE, t)
 
     def llvm_type(self):
         return ir.PointerType(self._type.llvm_type())
@@ -161,14 +341,14 @@ class Box(Type):
         return builder.alloca(self.llvm_type())
 
 
-class Tuple(Type):
+class Tuple(TypeOperator):
+    TYPE=Type()
     def __init__(self, types):
         self._types = list(types)
+        super().__init__(Tuple.TYPE, *t)
 
     def llvm_type(self):
-        return ir.LiteralStructType(map(lambda e: e.llvm_type(), self._types))
+        return ir.LiteralStructType(map(llvm_type, self._types))
 
     def get(self, index):
         return self_types[index]
-
-

@@ -21,8 +21,8 @@ class SquidExpr(Grammar, Typed, Compiled):
     and even just simple literals.  Essentially,
     anything which evaluates to a value at run-time.
     '''
-    def get_type(self, type_env=None):
-        return types.Void()
+    def infer_type(self, type_env):
+        raise Exception("cannot infer type of abstract expression")
 
 
 class SquidAggregate(SquidExpr):
@@ -37,12 +37,8 @@ class SquidAggregate(SquidExpr):
 class Variable(SquidExpr):
     grammar = (Identifier)
 
-    def get_type(self, context):
-        # look up type in type environment
-        return context.values().lookup(self[0].string)._symtype
-
-    def generate_ir(self, context, builder):
-        return builder.load(context.values().lookup(self[0].string)._symvalue)
+    def infer_type(self, type_env):
+        return ({}, type_env.lookup(self[0].string))
 
 class UnitTuple(SquidAggregate):
     grammar = (L('('), REF('Expr'), L(','), L(')'))
@@ -62,6 +58,23 @@ class Tuple(SquidAggregate):
 class Array(SquidAggregate):
     grammar = (L('['), LIST_OF(REF('Expr'), min=0), L(']'))
 
+    def infer_type(self, type_env):
+        items = self[0][1]
+    
+        result = types.TypeVariabie()
+        subst = {}
+        subst_item = item_type = items[0].infer_type(type_env)
+        subst.update(subst_item)
+
+        # TODO - need to check all items...
+        type_int = len(items.find_all(Expr))
+
+        # Unify
+        subst_result = types.unify(result, types.Array(item_type, type_int))
+        subst.update(subst_result)
+    
+        return (subst, result)
+
     def get_type(self):
         types = list(map(lambda e: e.get_type(), self[1].find_all(Expr)))
         # TODO all types should match
@@ -78,6 +91,23 @@ class CallExpr(SquidExpr):
     # TODO fix left-recursion 
     grammar = (Variable, ArgsTuple)
 
+    def infer_type(self, type_env):
+        # Here we are applying the arguments args to the function fun
+        fun = self[0]
+        args = self[1][1]
+    
+        result = types.TypeVariable()
+        subst = {}
+
+        subst_fun, fun_type = fun.infer_type(type_env)
+        subst.update(subst_fun)
+        subst_arg, arg_types = zip(*list(map(lambda a: a.infer_type(type_env), args)))
+
+        # Unify
+        subst.update(types.unify(fun_type, types.Function(result, list(arg_types))))
+    
+        return (subst, result)
+
     def on_check_types(self, context):
         func = context.values().lookup(self[0].string)
         return func._symtype._return_type
@@ -89,6 +119,25 @@ class CallExpr(SquidExpr):
 class IndexExpr(SquidExpr):
     # TODO fix left-recursion 
     grammar = (Variable, Array)
+
+    def infer_type(self, type_env):
+        array = self[0]
+        indices = self[1][1]
+        # indices should be int for now...
+    
+
+        result = types.TypeVariable()
+        subst = {}
+
+        subst_indices, indices_type = indices[0].infer_type(type_env)
+        subst.update(subst_indices) 
+        subst.update(types.unify(indices_type, types.Int()))
+
+        subst_array, array_type = array.infer_type(type_env)
+        subst.update(subst_array) 
+        subst.update(types.unify(array_type, types.Array(result, types.TypeVariable())))
+
+        return (subst, result.substitute(subst))
 
     def on_check_types(self, context):
         return self[0].get_type()
@@ -135,6 +184,9 @@ class BinOp(SquidExpr):
 
 class BinTerm(SquidExpr):
     grammar = (Literal | Variable | Aggregate | UnExpr | GroupExpr | CallExpr | IndexExpr)
+
+    def infer_type(self, type_env):
+        return self[0].infer_type(type_env)
 
     def on_check_types(self, context):
         return self[0].get_type()
@@ -193,9 +245,10 @@ class BinExpr(SquidExpr):
 
 class Expr(SquidExpr):
     grammar = (BinExpr | BinTerm)
+    grammar_tags = ('typed')
 
-    def on_check_types(self, context):
-        return self[0].get_type()
+    def infer_type(self, type_env):
+        return self[0].infer_type(type_env)
 
-    def generate_ir(self, context, builder):
-        return self[0].generate_ir(context, builder)
+    def get_free_type_vars(self, type_env=None):
+        return self[0].get_free_type_vars(type_env)
