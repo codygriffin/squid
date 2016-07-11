@@ -14,18 +14,17 @@ import llvmlite.binding as llvm
 
 
 
+
 # linker cmd: ld -o output output.o -read_only_relocs suppress -lc -lcrt1.o
 program = \
 """
 module main;
-
 fn puts(str: [i8]) -> i32;
 
-fn main () -> i32 {
+fn main () {
   let s = "hello from squid!";
   return puts(s[0]);
 };
-
 """
 
 if __name__ == '__main__':
@@ -33,15 +32,6 @@ if __name__ == '__main__':
     #parser = Expr.parser()
     try:
         # Create our root scope
-        root = Context()
-
-        root.types().bind("void", Void())
-        root.types().bind("i8", Int(8))
-        root.types().bind("i16", Int(16))
-        root.types().bind("i32", Int(32))
-        root.types().bind("i64", Int(64))
-        root.types().bind("bool", Bool())
-
         result = parser.parse_text(program, eof=True)
         
         # Pass over AST and fill out namespaces
@@ -62,6 +52,8 @@ if __name__ == '__main__':
         print(dump_ast(result))
 
         result.infer_type()
+        result.get_type_env().each(lambda v, t:
+            print(str(v) + " -> " + str(t)))
 
         sys.exit(1)
 

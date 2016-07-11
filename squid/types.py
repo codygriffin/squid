@@ -32,10 +32,10 @@ def unify(t1, t2):
     # TODO clean up types?
     a = t1
     b = t2
-    print (str(a) + " unifying with " + str(b))
+    #print (str(a) + " unifying with " + str(b))
     if isinstance(a, TypeVariable):
         if a != b:
-            if a.occurs_in(b):
+            if not isinstance(b, int) and a.occurs_in(b):
                 raise Exception("recursive unification")
             a.instance = b
             return {a: b}
@@ -48,6 +48,8 @@ def unify(t1, t2):
         for p, q in zip(a._params, b._params):
             subst.update(unify(p, q))
         return subst
+    elif isinstance(a, int) and isinstance(b, TypeVariable):
+        return unify(b, a)
     elif isinstance(a, int) and isinstance(b, int):
         if a != b:  
             raise Exception("Type (int) mismatch: {0} != {1}".format(str(a), str(b)))
@@ -55,7 +57,23 @@ def unify(t1, t2):
     else:
         assert 0, "Not unified: {0} != {1}".format(str(a), str(b))
 
-# XXX notes from http://dev.stephendiehl.com/fun/006_hindley_milner.html
+def compose_subst(s1, s2):
+    '''
+    Create a new substitution equivalent to substituting s1 and then s2.
+    '''
+    subst = {v: s2[v].substitute(s1) for v in s2 if not isinstance(s2[v], int)}
+    subst.update(s1) 
+    return subst
+
+def compose(*s):
+    '''
+    Compose an arbitrary number of substitutions
+    '''
+    return reduce(compose_subst, s,{})
+
+def subst_to_string(subst):
+    return "\n".join(["\t" + str(v) + " ==> " + str(t) for v, t in subst.items()])
+
 class TypeEnvironment(Substitutable):
     '''
     The type environment maps identifiers to types.
@@ -63,34 +81,16 @@ class TypeEnvironment(Substitutable):
     def __init__(self, type_vars={}):
         self._type_vars = type_vars
 
-    def generalize(self, typ):
-        '''
-        '''
-        return TypeOperator(typ, *(typ.free_type_vars() - self.free_type_vars()))
+    def clone(self):
+        return TypeEnvironment(type_vars=self._type_vars.copy())
 
-    def extend(self, var, scheme, copy=False):
-        extension = None
-
-        if copy:
-            extension = self._type_vars.copy()
-        else:
-            extension = self._type_vars
-
-        extension.update({
+    def extend(self, var, scheme):
+        self._type_vars.update({
             var: scheme
         })
-        return TypeEnvironment(type_vars=extension)
 
-    def restrict(self, var, copy=False):
-        restriction = None
-
-        if copy:
-            restriction = self._type_vars.copy()
-        else:
-            restriction = self._type_vars
-
-        restriction.remove(var)
-        return TypeEnvironment(type_vars=restriction)
+    def restrict(self, var):
+        self._type_vars.remove(var)
 
     def lookup(self, var):
         return self._type_vars[var]
@@ -99,17 +99,9 @@ class TypeEnvironment(Substitutable):
         for v, t in self._type_vars.items(): 
             cb(v, t);
         
-    def substitute(self, subst, copy=False):
-        substitution = None
-        if copy:
-            substitution = self._type_vars.copy()
-        else:
-            substitution = self._type_vars
-
-        for v, typ in subst.items():
-            substitution[v] = typ.substitute(subst)
-
-        return TypeEnvironment(type_vars=substitution)
+    def substitute(self, subst):
+        for key in self._type_vars:
+            self._type_vars[key] = self._type_vars[key].substitute(subst)
                 
     def free_type_vars(self):
         free_vars = set([])
@@ -215,12 +207,6 @@ class TypeOperator(Type):
         subst_free = {v: subst[v] for v in subst if v not in self._params}
         return TypeOperator(self._type.substitute(subst_free), self._params)
 
-    def instantiate(self):
-        '''
-        Bind our params, and return the new type 
-        '''
-        return self._type.substitute({p: TypeVariable() for p in self._params})
-
     def __str__(self):
         return type(self).__name__ + "<" + ", ".join(map(str, self._params)) + ">"
 
@@ -251,7 +237,8 @@ class Function(TypeOperator):
 
     def substitute(self, subst):
         args = list(map(lambda t: t.substitute(subst), self._args))
-        return Function(self._ret.substitute(subst), args)
+        ret = self._ret.substitute(subst)
+        return Function(ret, args)
 
 
 class Void(Type):
@@ -333,6 +320,9 @@ class Box(TypeOperator):
     def __init__(self, t):
         self._type = t
         super().__init__(Box.TYPE, t)
+
+    def substitute(self, subst):
+        return self
 
     def llvm_type(self):
         return ir.PointerType(self._type.llvm_type())

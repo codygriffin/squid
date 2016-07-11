@@ -92,20 +92,28 @@ class CallExpr(SquidExpr):
     grammar = (Variable, ArgsTuple)
 
     def infer_type(self, type_env):
-        # Here we are applying the arguments args to the function fun
         fun = self[0]
-        args = self[1][1]
+        args = self[1][1].find_all(Expr)
     
+        # Just allocate a variable for the result type
         result = types.TypeVariable()
         subst = {}
 
+        # Infer the type of the function
         subst_fun, fun_type = fun.infer_type(type_env)
-        subst.update(subst_fun)
-        subst_arg, arg_types = zip(*list(map(lambda a: a.infer_type(type_env), args)))
 
-        # Unify
-        subst.update(types.unify(fun_type, types.Function(result, list(arg_types))))
-    
+        # and the args
+        arg_types = []
+        for arg in args:
+            subst_arg, arg_type = arg.infer_type(type_env)
+            arg_types = arg_types + [arg_type]
+            subst = types.compose(subst, subst_arg)
+        
+
+        # Unify the return value of the function with our result type
+        subst = types.compose(subst_fun, subst_arg, types.unify(fun_type, types.Function(result, arg_types)))
+        type_env.substitute(subst)
+
         return (subst, result)
 
     def on_check_types(self, context):
@@ -123,21 +131,14 @@ class IndexExpr(SquidExpr):
     def infer_type(self, type_env):
         array = self[0]
         indices = self[1][1]
-        # indices should be int for now...
-    
 
         result = types.TypeVariable()
-        subst = {}
-
         subst_indices, indices_type = indices[0].infer_type(type_env)
-        subst.update(subst_indices) 
-        subst.update(types.unify(indices_type, types.Int()))
-
         subst_array, array_type = array.infer_type(type_env)
-        subst.update(subst_array) 
-        subst.update(types.unify(array_type, types.Array(result, types.TypeVariable())))
+        subst = types.compose(subst_indices, subst_array, types.unify(array_type, types.Array(result, types.TypeVariable())), types.unify(indices_type, types.Int()))
 
-        return (subst, result.substitute(subst))
+        type_env.substitute(subst)
+        return (subst, result)
 
     def on_check_types(self, context):
         return self[0].get_type()
@@ -228,18 +229,14 @@ class BinExpr(SquidExpr):
     def get_op(self):
         return self.elements[1][0].elements[0]
 
-    def on_build_types(self, context):
-        pass
-
-    def on_check_types(self, context):
-        t1 = self.get_lhs().get_type()
-
+    def infer_type(self, type_env):
+        subst, t1 = self.get_lhs().infer_type(type_env)
         for i in range(self.count_rhs()):
-            t2 = self.get_rhs(i).get_type()
-            if t1 != t2:
-                raise TypeError("types don't match: " + str(t1) + " and " + str(t2))
+            s2, t2 = self.get_rhs(i).infer_type(type_env)
+            subst = types.compose(subst, s2, types.unify(t1, t2)) 
 
-        return t1
+        type_env.substitute(subst)
+        return subst, t1
 
 #------------------------------
 

@@ -26,10 +26,16 @@ class Binding(Grammar, Typed):
     grammar = (Identifier, OPTIONAL(L(':'), TypeExpr))
     
     def infer_type(self, type_env):
+        subst = {}
         binding_type = types.TypeVariable()
-        # TODO construct the type when annotated
         type_env.extend(self.get_name(), binding_type)
-        return ({}, binding_type)
+        if self[1]:
+            annotated_type = self[1][1].construct(type_env)
+            subst = types.compose(subst, types.unify(annotated_type, binding_type))
+
+        type_env.substitute(subst)
+
+        return (subst, binding_type)
 
     def get_name(self):
         return self[0].string
@@ -45,18 +51,13 @@ class LetDeclaration(SquidStatement, Typed):
     grammar = (L('let'), Binding, L('='), Expr)
 
     def infer_type(self, type_env):
-        print("infering let decl")
         subst = {}
         subst_binding, binding_type = self[1].infer_type(type_env)
-        subst.update(subst_binding)
-        
         subst_exp, exp_type = self[3].infer_type(type_env)
-        subst.update(subst_exp)
-        
-        subst.update(types.unify(binding_type, exp_type))
-        # unify with identifier type
     
-        return (subst, None)
+        type_env.substitute(types.compose(subst_binding, subst_exp, types.unify(binding_type, exp_type)))
+    
+        return (types.compose(subst_binding, subst_exp, types.unify(binding_type, exp_type)), None)
 
 
     def on_check_types(self, context):
@@ -78,33 +79,53 @@ class LetDeclaration(SquidStatement, Typed):
 class VarDeclaration(SquidStatement):
     grammar = (L('var'), Binding, L('='), Expr)
 
-class FnDeclaration(SquidStatement):
+class FnDeclaration(SquidStatement, Scoped, Typed):
     grammar = (L('fn'), Identifier, ArgList, OPTIONAL(L('->'), TypeExpr), OPTIONAL(REF('Block')))
     grammar_tags = ("scope",)
 
+    def get_type_env(self):
+        return self._fn_env
+
     def infer_type(self, type_env):
-        print("infering fn decl")
         subst = {}
+
+        # We go ahead and pick some type variables for our declaration
         fn_type = types.TypeVariable()
-        type_env.extend(self[1].string, fn_type)
-
-        fn_env = type_env.substitute({}, copy=True)
-
         ret_type = types.TypeVariable()
         arg_types = []
-        for arg in self[2].find_all(Binding):
-            subst_binding, binding_type = arg.infer_type(fn_env)
-            subst.update(subst_binding)
-            arg_types = arg_types + [binding_type]
-            subst.update(types.unify(fn_type, types.Function(ret_type, arg_types)))
 
+        # We add the declared identifier to the type environment, and then
+        # we create a new environment for the function
+        type_env.extend(self[1].string, fn_type)
+        self._fn_env = type_env.clone()
+
+        # We infer the argument types
+        for arg in self[2].find_all(Binding):
+            subst_binding, binding_type = arg.infer_type(self._fn_env)
+            arg_types = arg_types + [binding_type]
+            subst = types.compose(subst, subst_binding)
+
+        # If a return type is specified, we go ahead and try to unify it with
+        # our return variable type
+        if self[3]:
+            ret_annotated_type = self[3].find(TypeExpr).construct(self._fn_env) 
+            subst = types.compose(subst, types.unify(ret_type, ret_annotated_type))
+
+        # If we have a body (this is a definition), then we go ahead and infer
+        # the type of the block, and also unify this with the return type
         if self[4]:
-            subst_body, body_type = self[4].infer_type(fn_env)
-            subst.update(subst_body)
-            subst.update(types.unify(ret_type, body_type))
-        
-        # unify with identifier type
-    
+            subst_body, body_type = self.find(Block).infer_type(self._fn_env)
+            subst = types.compose(subst_body, types.unify(ret_type, body_type))
+
+        # once we have some types for the return and args, we unify the actual function
+        # type.
+        subst = types.compose(subst, types.unify(fn_type, types.Function(ret_type, arg_types)))
+        self._fn_env.substitute(subst)
+
+        # TODO we need to ensure that any non-bound variables are updated in the 
+        # parent environment...
+        type_env.extend(self[1].string, self._fn_env.lookup(self[1].string))
+
         return (subst, None)
 
     def declaration_pass(self, ns):
@@ -179,12 +200,13 @@ class Return(SquidStatement):
     grammar = (L('return'), Expr)
 
     def infer_type(self, type_env):
-        print("infering return")
         subst = {}
+        
+        # We assume we know nothing about the return type
         ret_type = types.TypeVariable()
         subst_exp, exp_type = self[1].infer_type(type_env)
-        subst.update(subst_exp)
-        subst.update(types.unify(ret_type, exp_type))
+        subst = types.compose(subst_exp, types.unify(ret_type, exp_type))
+        type_env.substitute(subst)
         return (subst, ret_type)
 
     def on_check_types(self, context):
@@ -226,8 +248,6 @@ class Block(SquidStatement, Typed):
     grammar = (L('{'), ZERO_OR_MORE(REF('Statement')), L('}'))
 
     def infer_type(self, type_env):
-        print("infering block")
-
         subst = {}
 
         fns = self[1].find_all(FnDeclaration)
@@ -236,29 +256,23 @@ class Block(SquidStatement, Typed):
         rets = self[1].find_all(Return)
     
         for fn in fns:
-            print("fn in block")
-            print(fn)
             subst_fn, _ = fn.infer_type(type_env)
-            subst.update(subst_fn)
+            subst = types.compose(subst, subst_fn)
 
         for let in lets:
-            print("let in block")
-            print(let)
             subst_let, _ = let.infer_type(type_env)
-            subst.update(subst_let)
+            subst = types.compose(subst, subst_let)
 
         for expr in exprs:
-            print("expr in block")
-            print(expr)
             subst_expr, _ = expr.infer_type(type_env)
-            subst.update(subst_expr)
+            subst = types.compose(subst, subst_expr)
 
-        ret_type = None
+        ret_type = types.Void()
         for ret in rets:
-            print("ret in block")
-            print(ret)
             subst_ret, ret_type = ret.infer_type(type_env)
-            subst.update(subst_ret)
+            subst = types.compose(subst, subst_ret)
+
+        type_env.substitute(subst)
 
         # TODO sum types
         return (subst, ret_type)
