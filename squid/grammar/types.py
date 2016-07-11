@@ -29,10 +29,7 @@ class TypeConstructor(SquidType):
             return type_env.lookup(self.name())
         else:
             params = list(map(lambda t: type_env.types().lookup(t), self.params()))
-            print(self.name())
-            print(type_env.types()._symbols)
-            print(type_env.types().lookup(self.name()))
-            return type_env.types().lookup(self.name())(*params)
+            return type_env.lookup(self.name())(*params)
 
 class TypeGroup(SquidType):
     grammar = (L('('), REF('TypeExpr'), L(')'))
@@ -58,7 +55,8 @@ class TypeBox(SquidType):
     grammar = (L('['), REF('TypeExpr'), L(']'))
 
     def construct(self, type_env, *params):
-        return types.Box(self[1].construct(type_env))
+        box_type = self[1].construct(type_env)
+        return types.Box(box_type)
 
 class TypeUnitTuple(SquidType):
     grammar = (L('('), REF('TypeExpr'), L(','), L(')'))

@@ -19,6 +19,7 @@ import llvmlite.binding as llvm
 program = \
 """
 module main;
+
 fn puts(str: [i8]) -> i32;
 
 fn main () {
@@ -55,14 +56,15 @@ if __name__ == '__main__':
         result.get_type_env().each(lambda v, t:
             print(str(v) + " -> " + str(t)))
 
-        sys.exit(1)
 
 
         print("Dumping Symbols:")
 
+        module = result.compile()
+        module.triple = "x86_64-apple-darwin14.5.0"
+
         print("Dumping IR:")
         print(str(module))
-        module.triple = "x86_64-apple-darwin14.5.0"
 
        # llvm.initialize()
        # llvm.initialize_native_target()

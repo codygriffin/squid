@@ -58,9 +58,6 @@ class Function(Void):
     def alloca(self, builder):
         return None
 
-    def instantiate(self, name, builder):
-        return ir.Function(builder, self.llvm_type(), name)
-
 
 class Bool(Void):
     def llvm_type(self):
@@ -119,7 +116,7 @@ class Array(Void):
         return ir.ArrayType(self._type.llvm_type(), self._count)
 
     def alloca(self, builder):
-        return builder.alloca(self.llvm_type(), self._count)
+        return builder.alloca(self.llvm_type())
 
 class Box(Void):
     def __init__(self, t):

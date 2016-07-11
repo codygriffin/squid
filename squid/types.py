@@ -115,22 +115,12 @@ class TypeEnvironment(Substitutable):
 
 class Type(Substitutable):
     '''
-    Type is our unit type - all types are sub-types of
-    void.  Statements all return void.
-
-    Type has no values. 
     '''
-    def unify(self, other):
-        if (self == other):
-            return {}
-        else:
-            raise Exception("Unable to unify types!")
-
     def __str__(self):
         return type(self).__name__
 
     def substitute(self, subst):
-        return self
+        return self 
 
     def free_type_vars(self):
         return set()
@@ -173,17 +163,6 @@ class TypeVariable(Type):
         Test if this variable occurs in a type's free variables
         '''
         return self in typ.free_type_vars()
-
-    def bind(self, typ):
-        '''
-        Bind this variable to a type
-        '''
-        if self == typ:
-            return {}
-        elif self.occurs_in(typ):
-            raise Exception("Infinite Type!")
-        else:
-            return {self: typ}
 
     def __hash__(self):
         return self._id
@@ -239,11 +218,21 @@ class Function(TypeOperator):
         args = list(map(lambda t: t.substitute(subst), self._args))
         ret = self._ret.substitute(subst)
         return Function(ret, args)
+    
+    def llvm_type(self):
+        return ir.FunctionType(self._ret.llvm_type(), tuple(map(lambda e: e.llvm_type(), self._args)))
+
+    def alloca(self, builder):
+        return None
+
 
 
 class Void(Type):
     def llvm_type(self):
         return ir.VoidType()
+
+    def substitute(self, subst):
+        return self
     
     @classmethod
     def llvm_value(self, value):
@@ -271,17 +260,18 @@ class Bool(TypeOperator):
 class Int(TypeOperator):
     TYPE=Type()
     def __init__(self, size=32):
+        self._size = size
         super().__init__(Int.TYPE, size)
 
     def substitute(self, subst):
         return self
 
     def llvm_type(self):
-        return ir.IntType(32)
+        return ir.IntType(self._size)
 
     @classmethod
     def llvm_value(self, value):
-        return ir.Constant(ir.IntType(32), value);
+        return ir.Constant(ir.IntType(self._size), value);
 
 class Float(TypeOperator):
     TYPE=Type()
@@ -302,15 +292,15 @@ class Float(TypeOperator):
 class Array(TypeOperator):
     TYPE=Type()
     def __init__(self, t, count):
-        self._type = t
+        self._arr_type = t
         self._count = count
-        super().__init__(Array.TYPE, t, count)
+        super().__init__(Array.TYPE, self._arr_type, count)
 
     def substitute(self, subst):
-        return self
+        return Array(self._arr_type.substitute(subst), self._count)
 
     def llvm_type(self):
-        return ir.ArrayType(self._type.llvm_type(), self._count)
+        return ir.ArrayType(self._arr_type.llvm_type(), self._count)
 
     def alloca(self, builder):
         return builder.alloca(self.llvm_type(), self._count)
@@ -318,14 +308,14 @@ class Array(TypeOperator):
 class Box(TypeOperator):
     TYPE=Type()
     def __init__(self, t):
-        self._type = t
-        super().__init__(Box.TYPE, t)
+        self._box_type = t
+        super().__init__(Box.TYPE, self._box_type)
 
     def substitute(self, subst):
-        return self
+        return Box(self._box_type.substitute(subst))
 
     def llvm_type(self):
-        return ir.PointerType(self._type.llvm_type())
+        return ir.PointerType(self._box_type.llvm_type())
 
     def alloca(self, builder):
         return builder.alloca(self.llvm_type())
@@ -336,6 +326,9 @@ class Tuple(TypeOperator):
     def __init__(self, types):
         self._types = list(types)
         super().__init__(Tuple.TYPE, *t)
+
+    def substitute(self, subst):
+        return self
 
     def llvm_type(self):
         return ir.LiteralStructType(map(llvm_type, self._types))

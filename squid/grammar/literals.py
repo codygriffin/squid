@@ -1,10 +1,12 @@
 from modgrammar import *
+from llvmlite import ir
+
 from squid.grammar import *
 from squid import types
 
 grammar_whitespace_mode = 'optional'
 
-class SquidLiteral(Grammar, Typed):
+class SquidLiteral(Grammar, Typed, Compiled):
     '''
     Literals are things like numbers, strings, constants
     that we parse and have values and types at compile
@@ -16,6 +18,10 @@ class SquidLiteral(Grammar, Typed):
 
     def get_value(self):
         raise Exception("can't extract value of abstract literal")
+
+    def compile(self, builder, type_env, sym_table):
+        print('compiling literal')
+        return ir.Constant(self.infer_type(type_env)[1].llvm_type(), self.get_value())
 
 class RealLiteral(SquidLiteral):
     grammar = (OPTIONAL('-'), WORD('0-9'), '.', OPTIONAL(WORD('0-9')))

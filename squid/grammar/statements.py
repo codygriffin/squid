@@ -1,4 +1,5 @@
 from modgrammar import *
+from llvmlite import ir
 
 from squid import scope
 from squid import types
@@ -57,24 +58,15 @@ class LetDeclaration(SquidStatement, Typed):
     
         type_env.substitute(types.compose(subst_binding, subst_exp, types.unify(binding_type, exp_type)))
     
+        self._let_type = binding_type
         return (types.compose(subst_binding, subst_exp, types.unify(binding_type, exp_type)), None)
 
-
-    def on_check_types(self, context):
-        t1 = self[1].get_type()
-        t2 = self[3].get_type()
-        if t1 and t2 and t1 != t2:
-            raise TypeError("types don't match: " + str(t1) + " and " + str(t2))
-
-        context.values().bind(self[1].get_name(), scope.Symbol(symtype=t1))
-
-        return None
-
-    def generate_ir(self, context, builder):
+    def compile(self, builder, type_env, sym_table):
+        print("compiling let")
         # allocate a place on the stack for our var we are declaring
-        ref = self[3].get_type().alloca(builder);
-        context.values().lookup(self[1].get_name())._symvalue = ref
-        builder.store(self[3].generate_ir(context, builder), ref)
+        ref = type_env.lookup(self[1].get_name()).alloca(builder);
+        sym_table[self[1].get_name()] = ref
+        builder.store(self[3].compile(builder, type_env, sym_table), ref)
 
 class VarDeclaration(SquidStatement):
     grammar = (L('var'), Binding, L('='), Expr)
@@ -128,32 +120,20 @@ class FnDeclaration(SquidStatement, Scoped, Typed):
 
         return (subst, None)
 
-    def declaration_pass(self, ns):
-        ns = self.on_declaration_pass(ns)
-
-    def on_declaration_pass(self, context):
-        self._context = scope.Context(parent=context)
-        return self._context
-
-    def on_check_types(self, context):
-        ret = squid_types.Void()
-        if self[3]:
-            ret = self[3][1].construct(context)  
-        args = map(lambda t: t.get_type(), self[2].find_all(Binding))
-        t = squid_types.Function(ret, args)
-        context.values().bind(self[1].string, scope.Symbol(symtype=t))
-        return t
-
-    def generate_ir(self, context, builder):
-        function = self.get_type().instantiate(self[1].string, builder)
-        context.values().lookup(self[1].string)._symvalue = function
+    def compile(self, builder, type_env, sym_table):
+        print("compiling fn")
+        # Add to our symbol table
+        name = self[1].string
+        function = ir.Function(builder, type_env.lookup(name).llvm_type(), name)
+        sym_table[name] = function
+        # TODO new scope!
         if self[4]:
-            self[4].generate_ir(context, function)
+            self.find(Block).compile(function, type_env, sym_table)
 
 class ModuleDeclaration(SquidStatement):
     grammar = (L('module'), Identifier)
 
-    def generate_ir(self, context, builder):
+    def compile(self, builder, type_env, sym_table):
         pass
 
 class TypeDeclaration(SquidStatement):
@@ -176,25 +156,24 @@ class TypeDeclaration(SquidStatement):
 
             return context.types().bind(self[1].name(), type_ctor)
 
-    def generate_ir(self, context, builder):
+    def compile(self, builder, type_env, sym_table):
         return None 
 
 
 class Declaration(SquidStatement):
     grammar = (FnDeclaration | VarDeclaration | LetDeclaration | TypeDeclaration | ModuleDeclaration)
-    grammar_collapse=True
 
-    def generate_ir(self, context, builder):
-        self[0].generate_ir(context, builder)
+    def compile(self, builder, type_env, sym_table):
+        self[0].compile(builder, type_env, sym_table)
 
 #------------------------------
 
 class Assignment(SquidStatement):
     grammar = (Variable, L('='), Expr)
 
-    def generate_ir(self, context, builder):
+    def compile(self, builder, type_env, sym_table):
         # allocate a place on the stack for our var we are declaring
-        builder.store(self[2].generate_ir(context, builder), context.values().lookup(self[0].string)._symvalue)
+        builder.store(self[2].compile(builder, type_env, sym_table), sym_table[self[0].string])
 
 class Return(SquidStatement):
     grammar = (L('return'), Expr)
@@ -209,11 +188,8 @@ class Return(SquidStatement):
         type_env.substitute(subst)
         return (subst, ret_type)
 
-    def on_check_types(self, context):
-        return self[1].get_type()
-
-    def generate_ir(self, context, builder):
-        builder.ret(self[1].generate_ir(context, builder))
+    def compile(self, builder, type_env, sym_table):
+        builder.ret(self[1].compile(builder, type_env, sym_table))
 
 class LineComment(Grammar):
     grammar = (L('//'), REST_OF_LINE)
@@ -277,14 +253,7 @@ class Block(SquidStatement, Typed):
         # TODO sum types
         return (subst, ret_type)
 
-    def declaration_pass(self, ns):
-        ns = self.on_declaration_pass(ns)
-
-    def declare(self, scope):
-        self._scope = scope.Context(parent=context)
-        return self._scope
-
-    def generate_ir(self, context, builder, block=None):
+    def compile(self, builder, type_env, sym_table, block=None):
         if not block:
             block = builder.append_basic_block()
             block_builder = ir.IRBuilder(block)
@@ -292,12 +261,10 @@ class Block(SquidStatement, Typed):
             block_builder = block
 
         for stmt in self.find_all(Statement):
-            stmt.generate_ir(context, block_builder)
+            stmt.compile(block_builder, type_env, sym_table)
 
 class Statement(SquidStatement):
     grammar = (Block | Declaration | If | Assignment | Return | Expr, L(';'))
-    grammar_collapse=True
 
-    def generate_ir(self, context, builder):
-        self[0].generate_ir(context, builder)
-
+    def compile(self, builder, type_env, sym_table):
+        self[0].compile(builder, type_env, sym_table)

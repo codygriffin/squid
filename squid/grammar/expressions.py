@@ -1,6 +1,7 @@
 from modgrammar import *
-from squid import types
+from llvmlite import ir
 
+from squid import types
 from squid.grammar import *
 from squid.grammar.identifiers import Identifier
 from squid.grammar.literals import Literal
@@ -80,6 +81,9 @@ class Array(SquidAggregate):
         # TODO all types should match
         return squid_types.Array(types[0], len(types))
 
+    def as_list(self):
+        return list(self[1].find_all(Expr))
+
 class ArgsTuple(Grammar):
     grammar = (L('('), LIST_OF(REF('Expr'), min=0), L(')'))
 
@@ -120,9 +124,9 @@ class CallExpr(SquidExpr):
         func = context.values().lookup(self[0].string)
         return func._symtype._return_type
 
-    def generate_ir(self, context, builder):
-        func = context.values().lookup(self[0].string)._symvalue
-        return builder.call(func, map(lambda a: a.generate_ir(context, builder), self[1].find_all(Expr)))
+    def compile(self, builder, type_env, sym_table):
+        func = sym_table[self[0].string]
+        return builder.call(func, map(lambda a: a.compile(builder, type_env, sym_table), self[1].find_all(Expr)))
 
 class IndexExpr(SquidExpr):
     # TODO fix left-recursion 
@@ -143,9 +147,13 @@ class IndexExpr(SquidExpr):
     def on_check_types(self, context):
         return self[0].get_type()
 
-    def generate_ir(self, context, builder):
-        ref = context.values().lookup(self[0].string)._symvalue
-        return builder.gep(ref, [ir.Constant(ir.IntType(32), 0)] + self[1].as_list(context, builder))
+    def compile(self, builder, type_env, sym_table):
+        ref = sym_table[self[0].string]
+        args = []
+        for e in self[1].as_list():
+            args = args + [e.compile(builder, type_env, sym_table)] 
+            print(args)
+        return builder.gep(ref, [ir.Constant(ir.IntType(32), 0)] + args)
 
 class GroupExpr(SquidExpr):
     grammar = (L('('), REF('Expr'), L(')'))
@@ -153,8 +161,8 @@ class GroupExpr(SquidExpr):
     def on_check_types(self, context):
         return self[1].get_type()
 
-    def generate_ir(self, context, builder):
-        return self[1].generate_ir(context, builder)
+    def compile(self, builder, type_env, sym_table):
+        self[1].compile(builder, type_env, sym_table)
 
 #------------------------------
 
@@ -195,8 +203,8 @@ class BinTerm(SquidExpr):
     def value(self):
         return self[0].value()
 
-    def generate_ir(self, context, builder):
-        return self[0].generate_ir(context, builder)
+    def compile(self, builder, type_env, sym_table):
+        return self[0].compile(builder, type_env, sym_table)
 
 class BinExpr(SquidExpr):
     grammar = (BinTerm, ONE_OR_MORE(BinOp, BinTerm))
@@ -210,10 +218,12 @@ class BinExpr(SquidExpr):
         '!=': lambda b, x, y: b.icmp_signed('!=', x,y),
     }
 
-    def generate_ir(self, context, builder):
-        val = self[0].generate_ir(context, builder)
+    def compile(self, builder, type_env, sym_table):
+        print("bin expr")
+        print(self[0])
+        val = self[0].compile(builder, type_env, sym_table)
         for op in self[1].find_all(Grammar): 
-            val2 = op[1].generate_ir(context, builder)
+            val2 = op[1].compile(builder, type_env, sym_table)
             val = BinExpr.ops[op[0].string](builder, val, val2)
         return val
 
@@ -247,5 +257,6 @@ class Expr(SquidExpr):
     def infer_type(self, type_env):
         return self[0].infer_type(type_env)
 
-    def get_free_type_vars(self, type_env=None):
-        return self[0].get_free_type_vars(type_env)
+    def compile(self, builder, type_env, sym_table):
+        return self[0].compile(builder, type_env, sym_table)
+

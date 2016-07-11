@@ -21,5 +21,5 @@ class Compiled(object):
     '''
     Compiled nodes result in LLVM IR.  
     '''
-    def compile(self):
+    def compile(self, builder, type_env, sym_table):
         raise

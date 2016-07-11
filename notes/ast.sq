@@ -1,0 +1,41 @@
+trait Scope {
+  fn getSymTable() -> SymTable
+  fn getTypeEnv() -> TypeEnv
+}
+
+trait Typed {
+  fn analyze(type_env) -> inference
+}
+
+trait Compiled {
+  fn compile(builder, type_env, sym_table) -> value
+}
+
+trait Parser {
+  fn parse(str: String) 
+}
+
+struct Literal {
+  value: i32;
+}
+
+struct OpAdd;
+struct Opmap;
+struct Opmap;
+
+struct BinOp {
+  op: Operator
+}
+
+type Expr = BinOp | Literal
+
+struct Literal has trait Parse;
+struct BinOp   has trait Parse;
+
+fn Literal.parse(str) {
+  return Error()
+}
+
+fn main(args: [[u8,],]) {
+ 
+}
