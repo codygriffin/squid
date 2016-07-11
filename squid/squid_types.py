@@ -1,6 +1,12 @@
 from llvmlite import ir
 
 class Void(object):
+    '''
+    Void is our unit type - all types are sub-types of
+    void.  Statements all return void.
+
+    Void has no values.
+    '''
     def llvm_type(self):
         return ir.VoidType()
 
@@ -12,6 +18,45 @@ class Void(object):
     
     def __eq__(self, other):
         return self.__class__ == other.__class__
+
+
+class TypeVariable(object):
+    '''
+    A TypeVariable is used to fill out the type environment
+    while performing type inference.
+
+    TypeVariables are numbered starting from 0, and have a 
+    string "name" as %0, %1, etc
+    '''
+    next_id = 0
+    def __init__(self):
+        self._id = next_id
+        TypeVariable.next_id += 1
+    
+        self._instance = None
+
+    def name(self):
+        return "%" + str(self._id)
+
+class TypeConstructor(object):
+    '''
+    A TypeConstructor builds a new type from existing types
+    '''
+    def __init__(self, *params):
+        self._params = params
+
+
+# TODO should be a TypeConstructor (creates function types from ret/args types)
+class Function(Void):
+    def __init__(self, ret, args):
+        self._return_type = ret
+        self._arg_tuple = args 
+
+    def llvm_type(self):
+        return ir.FunctionType(self._return_type.llvm_type(), tuple(map(lambda e: e.llvm_type(), self._arg_tuple)))
+
+    def alloca(self, builder):
+        return None
 
 
 class Bool(Void):
@@ -71,7 +116,7 @@ class Array(Void):
         return ir.ArrayType(self._type.llvm_type(), self._count)
 
     def alloca(self, builder):
-        return builder.alloca(self.llvm_type(), self._count)
+        return builder.alloca(self.llvm_type())
 
 class Box(Void):
     def __init__(self, t):
@@ -95,16 +140,3 @@ class Tuple(Void):
         return self_types[index]
 
 
-class Function(Void):
-    def __init__(self, ret, args):
-        self._return_type = ret
-        self._arg_tuple = args 
-
-    def llvm_type(self):
-        return ir.FunctionType(self._return_type.llvm_type(), tuple(map(lambda e: e.llvm_type(), self._arg_tuple)))
-
-    def alloca(self, builder):
-        return None
-
-    def instantiate(self, name, builder):
-        return ir.Function(builder, self.llvm_type(), name)
